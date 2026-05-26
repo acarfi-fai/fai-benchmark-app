@@ -57,6 +57,52 @@ This document records product, architecture, and design decisions for the rewrit
 - We need a small design system: colors, typography, spacing, table/card patterns, status badges, charts, empty/error/loading states.
 - Accessibility and responsive behavior must be handled explicitly.
 
+## Deployment Decision
+
+**Decision:** Single deployed web app on Azure App Service with container.
+
+The Azure deployment should contain both:
+
+- FastAPI backend
+- Angular production build served as static files by FastAPI
+
+### Rationale
+
+- Simpler deployment and operations.
+- No CORS complexity.
+- One authentication/authorization boundary when auth is added.
+- Frontend and backend versions remain in sync.
+- Suitable for the current product stage.
+
+### Implications
+
+- API routes should live under `/api/...`.
+- Angular owns browser routes such as `/`, `/runs`, and `/runs/:id`.
+- FastAPI should serve Angular static assets and provide a fallback to `index.html` for frontend routes.
+- Docker/build pipeline needs both Node/Angular build steps and Python/FastAPI runtime setup.
+- This can be split later only if independent frontend/backend scaling or CDN hosting becomes necessary.
+
+## Authentication Decision
+
+**Decision:** Use Azure App Service Authentication with Microsoft Entra ID.
+
+Rationale:
+
+- Keeps authentication outside the application code for v1.
+- Azure can block unauthenticated requests before they reach FastAPI.
+- Avoids building custom login/session logic.
+- Provides a natural path for organization-managed access control.
+
+Implementation note:
+
+- In the simplest v1 setup, FastAPI and Angular do not need to implement login flows.
+- Azure App Service Authentication should be configured to require authentication for all requests.
+- Later, if the UI needs to display the signed-in user or enforce app-specific roles, the backend can read Azure-provided identity headers.
+
+## Product Name
+
+**Decision:** Use **FusionAI Eval Console**.
+
 ## Proposed Information Architecture
 
 ### Page 1: Runs / Logs List
@@ -85,6 +131,19 @@ Candidate interactions:
 - Click row/card to open run details
 - Refresh logs
 
+Decision: v1 uses a flat table; no grouping.
+
+Selected v1 columns:
+- Status
+- Task
+- Model
+- Started/completed time
+- Duration
+- Primary metric
+- Sample count, if cheaply available
+- Tags
+- File name
+
 ### Page 2: Run Detail
 
 Route: `/runs/:id`
@@ -100,6 +159,8 @@ Candidate sections:
 - Errors and warnings
 - Raw JSON view for debugging
 
+Decision: raw JSON should be hidden by default but accessible, e.g. behind a Debug / Raw JSON tab or disclosure.
+
 ### Page 3: Sample Detail
 
 Possible route: `/runs/:id/samples/:sampleId` or inline drawer.
@@ -113,6 +174,12 @@ Candidate data:
 - Error, if any
 - Messages / events / transcript if available from Inspect log
 
+Decision: v1 sample layout should use a two-column comparison:
+- Left: input + target
+- Right: output + scores
+
+Prioritize side-by-side comparison first, debugging second, raw JSON third.
+
 ## Initial API Shape
 
 Candidate endpoints:
@@ -124,7 +191,40 @@ Candidate endpoints:
 - `GET /api/runs/{run_id}/samples/{sample_id}`
 - `GET /api/runs/{run_id}/raw` for debug/admin use
 
-Open question: whether raw log access should be exposed in production or gated behind an admin/debug flag.
+Decision: raw log access should be hidden by default in the UI and exposed through a small `View raw JSON` disclosure/button in the metadata/debug area.
+
+## Brand Inputs
+
+### Logo
+
+Logo asset is available at:
+
+- `fai-benchmark-app/design-assets/logo.png`
+
+Once the Angular frontend exists, copy or move it to:
+
+- `fai-benchmark-app/frontend/src/assets/brand/logo.png`
+
+The app should reference the Angular asset path rather than loading files from outside the frontend build.
+
+### Brand Color
+
+Company color:
+
+- RGB: `rgb(0, 0, 200)`
+- Hex: `#0000c8`
+
+Initial use:
+
+- primary actions
+- active navigation state
+- selected filters
+- chart accent color
+- focus rings, with accessible contrast handling
+
+### Desired Product Feel
+
+The app should feel **technical**: precise, structured, data-oriented, and suitable for benchmark inspection/debugging.
 
 ## Design Inputs Needed
 
@@ -140,6 +240,67 @@ Useful inputs:
 - Desired tone: technical, premium, minimal, enterprise, research-lab, playful, etc.
 - Data density preference: compact table-heavy UI vs. spacious card-based UI.
 - Accessibility requirements and dark mode preference.
+
+## Visual Direction Decisions
+
+### Overall Feel
+
+- Technical, precise, structured, and data-oriented.
+- Mostly neutral technical tool with small FusionAI branding.
+- Avoid an overly crowded enterprise-portal feeling.
+
+### Density
+
+**Decision:** Medium density.
+
+Reference: closer to Linear spacing than Azure Portal crowdedness.
+
+### Navigation
+
+**Decision:** Minimal header plus page-level tabs.
+
+Rationale:
+- The app initially has few primary areas.
+- Avoids unnecessary sidebar complexity.
+- Keeps focus on benchmark data.
+
+### Run List
+
+**Decision:** Table-first.
+
+The landing page should prioritize a sortable/filterable table of runs rather than cards.
+
+Optional summary cards can be added later only if they provide clear value.
+
+### Color Mood
+
+**Decision:** Light technical UI.
+
+- White / light gray base.
+- FusionAI blue `#0000c8` as restrained accent.
+- Avoid excessive saturated blue.
+- Use semantic colors for statuses: success, failed, running, warning.
+
+### Typography
+
+Preference: LangSmith-like font feel.
+
+Implication:
+- Use a clean technical sans-serif.
+- Candidate stack: `Inter`, `ui-sans-serif`, `system-ui`, `-apple-system`, `BlinkMacSystemFont`, `"Segoe UI"`, `sans-serif`.
+- Consider a monospace font for JSON, IDs, model names, and code-like fields.
+
+### Detail Page Priority
+
+Sample/run detail should prioritize:
+
+1. Side-by-side comparison of input / target / output / scores.
+2. Debugging raw model behavior.
+3. Optional raw JSON transparency.
+
+### Explicit Negative Reference
+
+Avoid Azure Portal-style crowdedness and excessive navigation chrome.
 
 ## Open Questions
 
@@ -174,21 +335,85 @@ Useful inputs:
 4. Are charts needed in v1? If yes, which types?
 5. Should run list be table-first or card-first?
 
+## Routing Decisions
+
+Frontend routes:
+
+- `/` redirects to `/runs`
+- `/runs` shows the run list
+- `/runs/:runId` shows run detail
+
+Sample detail should be shown inline through a drawer/panel in v1, not as a separate route.
+
+## API/Data Decisions
+
+- Sample count should be shown in the run list only if available cheaply from header/results data.
+- Do not scan all samples just to compute sample counts for the run list.
+- API responses should be normalized DTOs rather than raw Inspect AI objects, except for the hidden raw JSON debug endpoint.
+
+## Local Development Decision
+
+Support both development modes:
+
+1. Angular dev server + FastAPI API during active frontend development.
+2. FastAPI serving the built Angular app for production-like local testing and Azure deployment.
+
 ## Tentative MVP
 
 1. Angular app with routing.
 2. FastAPI backend with normalized run-list and run-detail endpoints.
 3. Runs list page with search/filter/sort.
 4. Run detail page with summary, metrics, metadata, and paginated samples.
-5. Sample detail drawer/page.
+5. Sample detail drawer/page using two-column comparison layout.
 6. Plain SCSS design system with reusable components for tables, badges, panels, code blocks, and loading/error states.
 7. Azure-safe opaque run IDs; no raw blob paths in browser routes.
+8. Hidden-but-accessible raw JSON debug view.
+9. Azure App Service Authentication / Microsoft Entra ID configured at platform level.
+
+Explicitly out of scope for v1:
+- Run comparison.
+- Export to CSV/JSON/PDF.
+- Backend caching layer.
+- Grouped run navigation.
+
+## Implementation Status
+
+Initial rewrite scaffold implemented.
+
+### Created Structure
+
+- `backend/app/main.py` FastAPI application entrypoint.
+- `backend/app/api/routes.py` API routes under `/api`.
+- `backend/app/services/inspect_logs.py` Inspect AI log integration and normalized DTO mapping.
+- `backend/app/schemas.py` Pydantic response models.
+- `frontend/` Angular application.
+- `frontend/src/assets/brand/logo.png` copied from `design-assets/logo.png`.
+- `Dockerfile` multi-stage build: Angular build stage + Python/FastAPI runtime.
+- `README.md` local development and deployment notes.
+
+### Implemented Frontend
+
+- `/` redirects to `/runs`.
+- `/runs` table-first run list with search, status filter, refresh, and selected columns.
+- `/runs/:runId` detail page with summary metrics, sample list, two-column sample comparison, metadata, and hidden raw JSON disclosure.
+- Light technical SCSS visual system using FusionAI blue `#0000c8` as restrained accent.
+
+### Implemented Backend
+
+- `GET /api/health`
+- `GET /api/runs`
+- `GET /api/runs/{run_id}`
+- `GET /api/runs/{run_id}/samples`
+- `GET /api/runs/{run_id}/raw`
+
+### Verified
+
+- Angular production build succeeds.
+- FastAPI app imports successfully.
+- API routes work against local `prrr/` Inspect logs.
+- FastAPI serves Angular `index.html` fallback for frontend routes.
 
 ## Decisions Still Pending
 
-- Exact frontend route names.
-- Deployment topology.
-- Authentication model.
-- Design direction and brand references.
-- Whether to include comparison/export/review workflows in v1.
-- Final API response schemas.
+- Whether app-specific roles are needed beyond Azure App Service Authentication.
+- Whether the cheap sample count heuristic is sufficient across all log types.

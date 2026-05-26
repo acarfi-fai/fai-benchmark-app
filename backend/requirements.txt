@@ -1,0 +1,6 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+inspect-ai==0.3.224
+adlfs==2026.5.0
+azure-monitor-opentelemetry
+opentelemetry-instrumentation-fastapi
