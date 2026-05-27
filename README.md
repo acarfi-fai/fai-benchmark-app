@@ -73,4 +73,4 @@ API:
 - `GET /api/runs`
 - `GET /api/runs/{run_id}`
 - `GET /api/runs/{run_id}/samples`
-- `GET /api/runs/{run_id}/raw`
+- `GET /api/runs/{run_id}/samples/{sample_offset}`

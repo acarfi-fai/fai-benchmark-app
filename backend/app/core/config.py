@@ -12,4 +12,10 @@ def frontend_dist_dir() -> Path:
     configured = os.getenv("FRONTEND_DIST_DIR")
     if configured:
         return Path(configured)
-    return Path(__file__).resolve().parents[3] / "frontend" / "dist" / "fusionai-eval-console" / "browser"
+    return (
+        Path(__file__).resolve().parents[3]
+        / "frontend"
+        / "dist"
+        / "fusionai-eval-console"
+        / "browser"
+    )

@@ -155,18 +155,6 @@ def list_runs(limit: int = 200, include_headers: bool = True) -> list[RunSummary
     return runs
 
 
-def _normalize_log_sample_attachments(log_json: Any) -> Any:
-    if not isinstance(log_json, dict):
-        return log_json
-    samples = log_json.get("samples")
-    if not isinstance(samples, list):
-        return log_json
-    for sample in samples:
-        if isinstance(sample, dict):
-            sample["attachments"] = _normalize_attachments(sample.get("attachments"))
-    return log_json
-
-
 def _cached_run_log(run_id: str) -> Any:
     with _cache_lock:
         cached = _run_log_cache.get(run_id)
@@ -284,7 +272,3 @@ def run_sample(run_id: str, offset: int) -> tuple[str, SamplePreview]:
     if offset < 0 or offset >= len(samples):
         raise IndexError("sample offset out of range")
     return basename(path), sample_preview(samples[offset], include_attachments=True)
-
-
-def raw_log(run_id: str) -> Any:
-    return _normalize_log_sample_attachments(as_jsonable(_cached_run_log(run_id)))

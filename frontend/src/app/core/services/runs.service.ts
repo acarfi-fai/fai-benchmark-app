@@ -24,8 +24,4 @@ export class RunsService {
   getSample(runId: string, offset: number): Observable<SampleResponse> {
     return this.http.get<SampleResponse>(`/api/runs/${encodeURIComponent(runId)}/samples/${offset}`);
   }
-
-  getRaw(runId: string): Observable<unknown> {
-    return this.http.get<unknown>(`/api/runs/${encodeURIComponent(runId)}/raw`);
-  }
 }
