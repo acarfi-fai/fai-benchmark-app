@@ -6,14 +6,25 @@ Angular + FastAPI rewrite of the FusionAI benchmark log viewer.
 
 ### Backend
 
+The backend uses [`uv`](https://docs.astral.sh/uv/) for dependency management and local script execution.
+
 From `fai-benchmark-app/`:
 
 ```bash
 cd backend
-python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+uv sync
+uv run uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Set `INSPECT_LOG_DIR` or `LOG_DIR` to point to local logs or Azure Blob-backed Inspect logs.
+Set `INSPECT_LOG_DIR` or `LOG_DIR` to point to local logs or Azure Blob-backed Inspect logs:
+
+```bash
+export INSPECT_LOG_DIR=/path/to/logs
+# or, for Azure Blob-backed Inspect logs:
+export INSPECT_LOG_DIR=az://logs
+```
+
+Azure-backed log access requires the `adlfs` dependency, which is included in `backend/pyproject.toml`. Make sure your Azure credentials are available in the environment before using an `az://` log path.
 
 ### Frontend
 
@@ -34,8 +45,9 @@ cd frontend
 npm install
 npm run build
 cd ../backend
+uv sync
 FRONTEND_DIST_DIR=../frontend/dist/fusionai-eval-console/browser \
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 ## Docker
