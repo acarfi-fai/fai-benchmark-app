@@ -56,3 +56,10 @@ export interface SamplesResponse {
   total_seen: number;
   samples: SamplePreview[];
 }
+
+export interface SampleResponse {
+  id: string;
+  file: string;
+  offset: number;
+  sample: SamplePreview;
+}

@@ -62,3 +62,10 @@ class SamplesResponse(BaseModel):
     count: int
     total_seen: int
     samples: list[SamplePreview]
+
+
+class SampleResponse(BaseModel):
+    id: str
+    file: str
+    offset: int = Field(ge=0)
+    sample: SamplePreview

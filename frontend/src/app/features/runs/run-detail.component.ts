@@ -63,7 +63,7 @@ interface SampleScoreRow {
         <h2>Metadata</h2>
         <pre>{{ prettyJson(detail.summary.metadata) }}</pre>
         <details class="raw-json">
-          <summary>View raw JSON</summary>
+          <summary>View compact run JSON</summary>
           <pre>{{ prettyJson(detail.log) }}</pre>
         </details>
       </section>
@@ -163,8 +163,8 @@ export class RunDetailComponent {
     this.runsService.getRun(this.currentRunId).subscribe({
       next: (response) => {
         this.detail.set(response);
-        this.updateSamplesFromLoadedLog();
         this.loading.set(false);
+        this.loadSamples();
       },
       error: (err: unknown) => {
         this.error.set(err instanceof Error ? err.message : 'Failed to load run.');
@@ -173,40 +173,31 @@ export class RunDetailComponent {
     });
   }
 
-  private updateSamplesFromLoadedLog(): void {
+  private loadSamples(): void {
     this.samplesError.set(null);
-    this.samplesLoading.set(false);
+    this.samplesLoading.set(true);
     this.selectedSample.set(null);
 
-    const detail = this.detail();
-    const log = detail?.log as { samples?: SamplePreview[] } | null;
-    const allSamples = log?.samples || [];
-    const page = allSamples.slice(this.offset, this.offset + this.limit);
-
-    if (!detail) {
-      this.samples.set(null);
-      return;
-    }
-
-    this.samples.set({
-      id: this.currentRunId,
-      file: detail.file,
-      offset: this.offset,
-      limit: this.limit,
-      count: page.length,
-      total_seen: allSamples.length,
-      samples: page,
+    this.runsService.getSamples(this.currentRunId, this.limit, this.offset).subscribe({
+      next: (response) => {
+        this.samples.set(response);
+        this.samplesLoading.set(false);
+      },
+      error: (err: unknown) => {
+        this.samplesError.set(err instanceof Error ? err.message : 'Failed to load samples.');
+        this.samplesLoading.set(false);
+      },
     });
   }
 
   previousPage(): void {
     this.offset = Math.max(0, this.offset - this.limit);
-    this.updateSamplesFromLoadedLog();
+    this.loadSamples();
   }
 
   nextPage(): void {
     this.offset += this.limit;
-    this.updateSamplesFromLoadedLog();
+    this.loadSamples();
   }
 
   toggleSample(sample: SamplePreview, absoluteOffset: number): void {
@@ -215,12 +206,18 @@ export class RunDetailComponent {
       return;
     }
 
-    const expanded = this.sampleFromLoadedLog(sample, absoluteOffset);
-    if (!expanded) {
+    if (sample.attachments) {
       this.selectedSample.set(sample);
       return;
     }
 
+    this.runsService.getSample(this.currentRunId, absoluteOffset).subscribe({
+      next: (response) => this.replaceAndSelectSample(sample, response.sample),
+      error: () => this.selectedSample.set(sample),
+    });
+  }
+
+  private replaceAndSelectSample(original: SamplePreview, expanded: SamplePreview): void {
     const response = this.samples();
     if (!response) {
       this.selectedSample.set(expanded);
@@ -229,19 +226,11 @@ export class RunDetailComponent {
 
     const sameSample = (item: SamplePreview) => expanded.uuid
       ? item.uuid === expanded.uuid
-      : item.id === expanded.id && item.epoch === expanded.epoch;
+      : item === original || (item.id === expanded.id && item.epoch === expanded.epoch);
     const updatedSamples = response.samples.map((item) => sameSample(item) ? { ...item, ...expanded } : item);
     const selected = updatedSamples.find((item) => sameSample(item)) || expanded;
     this.samples.set({ ...response, samples: updatedSamples });
     this.selectedSample.set(selected);
-  }
-
-  private sampleFromLoadedLog(sample: SamplePreview, absoluteOffset: number): SamplePreview | null {
-    const log = this.detail()?.log as { samples?: SamplePreview[] } | null;
-    const samples = log?.samples || [];
-    return samples.find((item) => sample.uuid ? item.uuid === sample.uuid : item.id === sample.id && item.epoch === sample.epoch)
-      || samples[absoluteOffset]
-      || null;
   }
 
   scoreRows(detail: RunDetailResponse): ScoreRow[] {

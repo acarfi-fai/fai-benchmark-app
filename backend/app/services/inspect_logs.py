@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime
+from threading import Lock
 from typing import Any
 
 from inspect_ai.log import list_eval_logs, read_eval_log
@@ -12,6 +15,33 @@ from app.core.config import log_dir
 from app.core.ids import decode_id, encode_id
 from app.core.json import as_jsonable
 from app.schemas import PrimaryMetric, RunSummary, SamplePreview
+
+
+@dataclass(frozen=True)
+class _RunsListCacheEntry:
+    created_at: float
+    signature: tuple[tuple[str, float | None, int | None], ...]
+    runs: list[RunSummary]
+
+
+@dataclass(frozen=True)
+class _RunLogCacheEntry:
+    created_at: float
+    log: Any
+
+
+_runs_list_cache: dict[tuple[str, int, bool], _RunsListCacheEntry] = {}
+_run_log_cache: dict[str, _RunLogCacheEntry] = {}
+_cache_lock = Lock()
+
+
+def _cache_ttl_seconds() -> float:
+    return float(os.getenv("INSPECT_LOG_CACHE_TTL_SECONDS", "300"))
+
+
+def _cache_expired(created_at: float) -> bool:
+    ttl = _cache_ttl_seconds()
+    return ttl >= 0 and time.monotonic() - created_at > ttl
 
 
 def basename(path: str) -> str:
@@ -92,18 +122,37 @@ def summarize_log(info: Any, include_header: bool = True) -> RunSummary:
     return summary
 
 
+def _runs_signature(logs: list[Any]) -> tuple[tuple[str, float | None, int | None], ...]:
+    return tuple(
+        (getattr(info, "name", ""), getattr(info, "mtime", None), getattr(info, "size", None))
+        for info in logs
+    )
+
+
 def list_runs(limit: int = 200, include_headers: bool = True) -> list[RunSummary]:
     logs = list_eval_logs(log_dir(), recursive=True)[:limit]
-    if not include_headers or len(logs) <= 1:
-        return [summarize_log(info, include_headers) for info in logs]
+    signature = _runs_signature(logs)
+    cache_key = (log_dir(), limit, include_headers)
 
-    # Azure-backed logs are latency-bound. Reading every header sequentially makes the
-    # runs page wait on one blob request per log; Inspect's viewer does this work more
-    # lazily/cached. Parallelize the cheap header reads so the page is not dominated by
-    # round-trip latency.
-    workers = min(len(logs), int(os.getenv("INSPECT_LOG_HEADER_WORKERS", "16")))
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
-        return list(executor.map(summarize_log, logs, [include_headers] * len(logs)))
+    with _cache_lock:
+        cached = _runs_list_cache.get(cache_key)
+        if cached and cached.signature == signature and not _cache_expired(cached.created_at):
+            return cached.runs
+
+    if not include_headers or len(logs) <= 1:
+        runs = [summarize_log(info, include_headers) for info in logs]
+    else:
+        # Azure-backed logs are latency-bound. Reading every header sequentially makes the
+        # runs page wait on one blob request per log; Inspect's viewer does this work more
+        # lazily/cached. Parallelize the cheap header reads so the page is not dominated by
+        # round-trip latency.
+        workers = min(len(logs), int(os.getenv("INSPECT_LOG_HEADER_WORKERS", "16")))
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+            runs = list(executor.map(summarize_log, logs, [include_headers] * len(logs)))
+
+    with _cache_lock:
+        _runs_list_cache[cache_key] = _RunsListCacheEntry(time.monotonic(), signature, runs)
+    return runs
 
 
 def _normalize_log_sample_attachments(log_json: Any) -> Any:
@@ -118,24 +167,51 @@ def _normalize_log_sample_attachments(log_json: Any) -> Any:
     return log_json
 
 
-def run_detail(run_id: str) -> tuple[str, RunSummary, Any]:
-    path = decode_id(run_id)
-    log = read_eval_log(path, header_only=False, resolve_attachments=False)
-    info = type(
+def _cached_run_log(run_id: str) -> Any:
+    with _cache_lock:
+        cached = _run_log_cache.get(run_id)
+        if cached and not _cache_expired(cached.created_at):
+            return cached.log
+
+    log = read_eval_log(decode_id(run_id), header_only=False, resolve_attachments=False)
+
+    with _cache_lock:
+        _run_log_cache[run_id] = _RunLogCacheEntry(time.monotonic(), log)
+    return log
+
+
+def _summary_info_from_header(path: str, header: Any) -> Any:
+    return type(
         "Info",
         (),
         {
             "name": path,
-            "task": getattr(getattr(log, "eval", None), "task", None),
-            "task_id": getattr(getattr(log, "eval", None), "task_id", None),
+            "task": getattr(getattr(header, "eval", None), "task", None),
+            "task_id": getattr(getattr(header, "eval", None), "task_id", None),
             "mtime": None,
             "size": None,
         },
     )()
+
+
+def _compact_header_log(header: Any) -> dict[str, Any]:
+    header_json = as_jsonable(header)
+    if not isinstance(header_json, dict):
+        return {}
+    return {
+        key: value
+        for key, value in header_json.items()
+        if key not in {"samples", "reductions", "events"}
+    }
+
+
+def run_detail(run_id: str) -> tuple[str, RunSummary, Any]:
+    path = decode_id(run_id)
+    header = read_eval_log(path, header_only=True)
     return (
         basename(path),
-        summarize_log(info, include_header=True),
-        _normalize_log_sample_attachments(as_jsonable(log)),
+        summarize_log(_summary_info_from_header(path, header), include_header=True),
+        _compact_header_log(header),
     )
 
 
@@ -195,17 +271,20 @@ def run_samples(
     run_id: str, limit: int = 100, offset: int = 0
 ) -> tuple[str, int, list[SamplePreview]]:
     path = decode_id(run_id)
-
-    # Read the log once and slice the already-materialized samples. The previous
-    # implementation asked Inspect to read each visible sample individually, which
-    # made a 50-row page perform 50 separate sample reads against remote .eval logs.
-    # Keep the list payload light: multimedia attachments are read from the full
-    # run detail JSON already loaded by the frontend.
-    log = read_eval_log(path, header_only=False, resolve_attachments=False)
+    log = _cached_run_log(run_id)
     samples = log.samples or []
     page = samples[offset : offset + limit]
     return basename(path), len(samples), [sample_preview(sample) for sample in page]
 
 
+def run_sample(run_id: str, offset: int) -> tuple[str, SamplePreview]:
+    path = decode_id(run_id)
+    log = _cached_run_log(run_id)
+    samples = log.samples or []
+    if offset < 0 or offset >= len(samples):
+        raise IndexError("sample offset out of range")
+    return basename(path), sample_preview(samples[offset], include_attachments=True)
+
+
 def raw_log(run_id: str) -> Any:
-    return as_jsonable(read_eval_log(decode_id(run_id), header_only=False))
+    return _normalize_log_sample_attachments(as_jsonable(_cached_run_log(run_id)))

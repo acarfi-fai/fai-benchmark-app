@@ -1,7 +1,7 @@
 import { Injectable, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { Observable } from 'rxjs';
-import { RunDetailResponse, RunsResponse, SamplesResponse } from '../models/run.models';
+import { RunDetailResponse, RunsResponse, SampleResponse, SamplesResponse } from '../models/run.models';
 
 @Injectable({ providedIn: 'root' })
 export class RunsService {
@@ -19,6 +19,10 @@ export class RunsService {
     return this.http.get<SamplesResponse>(`/api/runs/${encodeURIComponent(runId)}/samples`, {
       params: { limit, offset },
     });
+  }
+
+  getSample(runId: string, offset: number): Observable<SampleResponse> {
+    return this.http.get<SampleResponse>(`/api/runs/${encodeURIComponent(runId)}/samples/${offset}`);
   }
 
   getRaw(runId: string): Observable<unknown> {

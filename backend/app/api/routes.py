@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
 from app.core.config import log_dir
-from app.schemas import RunDetailResponse, RunsResponse, SamplesResponse
-from app.services.inspect_logs import list_runs, raw_log, run_detail, run_samples
+from app.schemas import RunDetailResponse, RunsResponse, SampleResponse, SamplesResponse
+from app.services.inspect_logs import list_runs, raw_log, run_detail, run_sample, run_samples
 
 router = APIRouter(prefix="/api")
 
@@ -45,6 +45,15 @@ def samples(
         total_seen=total_seen,
         samples=items,
     )
+
+
+@router.get("/runs/{run_id}/samples/{sample_offset}", response_model=SampleResponse)
+def sample(run_id: str, sample_offset: int) -> SampleResponse:
+    try:
+        file, item = run_sample(run_id, offset=sample_offset)
+    except IndexError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return SampleResponse(id=run_id, file=file, offset=sample_offset, sample=item)
 
 
 @router.get("/runs/{run_id}/raw")
