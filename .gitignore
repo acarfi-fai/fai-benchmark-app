@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Python virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# uv
+# Keep uv.lock for reproducible application installs.
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Logs and local data
+logs/
+*.log
+
+# Node / Angular
+frontend/node_modules/
+frontend/.angular/
+frontend/dist/
+frontend/.nx/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Local temp files
+.tmp/
+tmp/
