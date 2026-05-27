@@ -18,7 +18,9 @@ def health() -> dict[str, str]:
 
 @router.get("/runs", response_model=RunsResponse)
 def runs(limit: int = Query(200, ge=1, le=1000), include_headers: bool = True) -> RunsResponse:
-    return RunsResponse(log_dir=log_dir(), runs=list_runs(limit=limit, include_headers=include_headers))
+    return RunsResponse(
+        log_dir=log_dir(), runs=list_runs(limit=limit, include_headers=include_headers)
+    )
 
 
 @router.get("/runs/{run_id}", response_model=RunDetailResponse)

@@ -78,7 +78,7 @@ interface SampleScoreRow {
             <span *ngFor="let scoreName of sampleScoreNames(sampleResponse.samples)">{{ scoreName }}</span>
           </div>
           <article class="sample-card" *ngFor="let sample of sampleResponse.samples; let i = index">
-            <button class="sample-header" [style.gridTemplateColumns]="sampleGridColumns(sampleResponse.samples)" type="button" (click)="selectedSample.set(selectedSample() === sample ? null : sample)">
+            <button class="sample-header" [style.gridTemplateColumns]="sampleGridColumns(sampleResponse.samples)" type="button" (click)="toggleSample(sample, sampleResponse.offset + i)">
               <span class="mono">{{ sample.id ?? i + 1 }}</span>
               <span class="mono" *ngFor="let scoreName of sampleScoreNames(sampleResponse.samples)">{{ sampleScoreValue(sample, scoreName) }}</span>
             </button>
@@ -153,8 +153,8 @@ export class RunDetailComponent {
   set runId(value: string) {
     this.currentRunId = value;
     this.offset = 0;
+    this.samples.set(null);
     this.loadRun();
-    this.loadSamples();
   }
 
   loadRun(): void {
@@ -163,6 +163,7 @@ export class RunDetailComponent {
     this.runsService.getRun(this.currentRunId).subscribe({
       next: (response) => {
         this.detail.set(response);
+        this.updateSamplesFromLoadedLog();
         this.loading.set(false);
       },
       error: (err: unknown) => {
@@ -172,30 +173,75 @@ export class RunDetailComponent {
     });
   }
 
-  loadSamples(): void {
-    this.samplesLoading.set(true);
+  private updateSamplesFromLoadedLog(): void {
     this.samplesError.set(null);
+    this.samplesLoading.set(false);
     this.selectedSample.set(null);
-    this.runsService.getSamples(this.currentRunId, this.limit, this.offset).subscribe({
-      next: (response) => {
-        this.samples.set(response);
-        this.samplesLoading.set(false);
-      },
-      error: (err: unknown) => {
-        this.samplesError.set(err instanceof Error ? err.message : 'Failed to load samples.');
-        this.samplesLoading.set(false);
-      },
+
+    const detail = this.detail();
+    const log = detail?.log as { samples?: SamplePreview[] } | null;
+    const allSamples = log?.samples || [];
+    const page = allSamples.slice(this.offset, this.offset + this.limit);
+
+    if (!detail) {
+      this.samples.set(null);
+      return;
+    }
+
+    this.samples.set({
+      id: this.currentRunId,
+      file: detail.file,
+      offset: this.offset,
+      limit: this.limit,
+      count: page.length,
+      total_seen: allSamples.length,
+      samples: page,
     });
   }
 
   previousPage(): void {
     this.offset = Math.max(0, this.offset - this.limit);
-    this.loadSamples();
+    this.updateSamplesFromLoadedLog();
   }
 
   nextPage(): void {
     this.offset += this.limit;
-    this.loadSamples();
+    this.updateSamplesFromLoadedLog();
+  }
+
+  toggleSample(sample: SamplePreview, absoluteOffset: number): void {
+    if (this.selectedSample() === sample) {
+      this.selectedSample.set(null);
+      return;
+    }
+
+    const expanded = this.sampleFromLoadedLog(sample, absoluteOffset);
+    if (!expanded) {
+      this.selectedSample.set(sample);
+      return;
+    }
+
+    const response = this.samples();
+    if (!response) {
+      this.selectedSample.set(expanded);
+      return;
+    }
+
+    const sameSample = (item: SamplePreview) => expanded.uuid
+      ? item.uuid === expanded.uuid
+      : item.id === expanded.id && item.epoch === expanded.epoch;
+    const updatedSamples = response.samples.map((item) => sameSample(item) ? { ...item, ...expanded } : item);
+    const selected = updatedSamples.find((item) => sameSample(item)) || expanded;
+    this.samples.set({ ...response, samples: updatedSamples });
+    this.selectedSample.set(selected);
+  }
+
+  private sampleFromLoadedLog(sample: SamplePreview, absoluteOffset: number): SamplePreview | null {
+    const log = this.detail()?.log as { samples?: SamplePreview[] } | null;
+    const samples = log?.samples || [];
+    return samples.find((item) => sample.uuid ? item.uuid === sample.uuid : item.id === sample.id && item.epoch === sample.epoch)
+      || samples[absoluteOffset]
+      || null;
   }
 
   scoreRows(detail: RunDetailResponse): ScoreRow[] {
@@ -212,9 +258,39 @@ export class RunDetailComponent {
   }
 
   imageAttachments(sample: SamplePreview): Array<{ name: string; src: string }> {
-    return Object.entries(sample.attachments || {})
-      .filter(([, value]) => typeof value === 'string' && value.startsWith('data:image/'))
-      .map(([name, src]) => ({ name, src }));
+    const attachments = sample.attachments || {};
+    const images: Array<{ name: string; src: string }> = [];
+    const seen = new Set<string>();
+
+    const addImage = (name: string, value: unknown): void => {
+      if (typeof value !== 'string') return;
+      const src = value.startsWith('attachment://') ? attachments[value.slice('attachment://'.length)] : value;
+      if (!this.isImageSource(src) || seen.has(src)) return;
+      seen.add(src);
+      images.push({ name, src });
+    };
+
+    for (const [name, value] of Object.entries(attachments)) addImage(name, value);
+
+    let index = 1;
+    const walk = (value: unknown): void => {
+      if (typeof value === 'string') {
+        addImage(`image-${index++}`, value);
+        return;
+      }
+      if (Array.isArray(value)) {
+        for (const item of value) walk(item);
+        return;
+      }
+      if (this.isRecord(value)) {
+        for (const item of Object.values(value)) walk(item);
+      }
+    };
+    walk(sample.input);
+    walk(sample.target);
+    walk(sample.metadata);
+
+    return images;
   }
 
   sampleScoreRows(sample: SamplePreview): SampleScoreRow[] {
@@ -298,6 +374,13 @@ export class RunDetailComponent {
     if (Array.isArray(value)) return value.map((item) => this.renderCell(item)).join('\n');
     if (this.isRecord(value)) return Object.entries(value).map(([key, item]) => `${key}: ${this.renderCell(item)}`).join('\n');
     return String(value);
+  }
+
+  private isImageSource(value: unknown): value is string {
+    if (typeof value !== 'string') return false;
+    if (value.startsWith('data:image/')) return true;
+    if (!value.startsWith('http://') && !value.startsWith('https://')) return false;
+    return /\.(png|jpe?g|gif|webp|bmp|svg)(\?|#|$)/i.test(value) || value.includes('.blob.core.windows.net/');
   }
 
   private extractText(value: unknown): string {

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import base64
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any
 
-from inspect_ai.log import list_eval_logs, read_eval_log, read_eval_log_samples
+from inspect_ai.log import list_eval_logs, read_eval_log
 
 from app.core.config import log_dir
 from app.core.ids import decode_id, encode_id
@@ -91,20 +94,89 @@ def summarize_log(info: Any, include_header: bool = True) -> RunSummary:
 
 def list_runs(limit: int = 200, include_headers: bool = True) -> list[RunSummary]:
     logs = list_eval_logs(log_dir(), recursive=True)[:limit]
-    return [summarize_log(info, include_headers) for info in logs]
+    if not include_headers or len(logs) <= 1:
+        return [summarize_log(info, include_headers) for info in logs]
+
+    # Azure-backed logs are latency-bound. Reading every header sequentially makes the
+    # runs page wait on one blob request per log; Inspect's viewer does this work more
+    # lazily/cached. Parallelize the cheap header reads so the page is not dominated by
+    # round-trip latency.
+    workers = min(len(logs), int(os.getenv("INSPECT_LOG_HEADER_WORKERS", "16")))
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+        return list(executor.map(summarize_log, logs, [include_headers] * len(logs)))
+
+
+def _normalize_log_sample_attachments(log_json: Any) -> Any:
+    if not isinstance(log_json, dict):
+        return log_json
+    samples = log_json.get("samples")
+    if not isinstance(samples, list):
+        return log_json
+    for sample in samples:
+        if isinstance(sample, dict):
+            sample["attachments"] = _normalize_attachments(sample.get("attachments"))
+    return log_json
 
 
 def run_detail(run_id: str) -> tuple[str, RunSummary, Any]:
     path = decode_id(run_id)
-    header = read_eval_log(path, header_only=True)
-    info = type("Info", (), {"name": path, "task": getattr(getattr(header, "eval", None), "task", None), "task_id": getattr(getattr(header, "eval", None), "task_id", None), "mtime": None, "size": None})()
-    return basename(path), summarize_log(info, include_header=True), as_jsonable(header)
+    log = read_eval_log(path, header_only=False, resolve_attachments=False)
+    info = type(
+        "Info",
+        (),
+        {
+            "name": path,
+            "task": getattr(getattr(log, "eval", None), "task", None),
+            "task_id": getattr(getattr(log, "eval", None), "task_id", None),
+            "mtime": None,
+            "size": None,
+        },
+    )()
+    return (
+        basename(path),
+        summarize_log(info, include_header=True),
+        _normalize_log_sample_attachments(as_jsonable(log)),
+    )
 
 
-def sample_preview(sample: Any) -> SamplePreview:
+def _normalize_data_image_uri(value: str) -> str:
+    if not value.startswith("data:image/") or ";base64," not in value[:64]:
+        return value
+    header, encoded = value.split(",", 1)
+    try:
+        prefix = base64.b64decode(encoded[:64] + "===")[:16]
+    except Exception:
+        return value
+
+    mime = None
+    if prefix.startswith(b"\xff\xd8\xff"):
+        mime = "image/jpeg"
+    elif prefix.startswith(b"\x89PNG\r\n\x1a\n"):
+        mime = "image/png"
+    elif prefix.startswith(b"GIF87a") or prefix.startswith(b"GIF89a"):
+        mime = "image/gif"
+    elif prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP":
+        mime = "image/webp"
+
+    if mime is None or header.startswith(f"data:{mime};"):
+        return value
+    return f"data:{mime};base64,{encoded}"
+
+
+def _normalize_attachments(attachments: Any) -> Any:
+    if not isinstance(attachments, dict):
+        return attachments
+    return {
+        key: _normalize_data_image_uri(value) if isinstance(value, str) else value
+        for key, value in attachments.items()
+    }
+
+
+def sample_preview(sample: Any, include_attachments: bool = False) -> SamplePreview:
     output = getattr(sample, "output", None)
     completion = getattr(output, "completion", None) if output else None
-    attachments = getattr(sample, "attachments", None) or None
+    attachments = (getattr(sample, "attachments", None) or None) if include_attachments else None
+    attachments = _normalize_attachments(attachments)
     return SamplePreview(
         id=getattr(sample, "id", None),
         epoch=getattr(sample, "epoch", None),
@@ -119,18 +191,20 @@ def sample_preview(sample: Any) -> SamplePreview:
     )
 
 
-def run_samples(run_id: str, limit: int = 100, offset: int = 0) -> tuple[str, int, list[SamplePreview]]:
+def run_samples(
+    run_id: str, limit: int = 100, offset: int = 0
+) -> tuple[str, int, list[SamplePreview]]:
     path = decode_id(run_id)
-    samples: list[SamplePreview] = []
-    total_seen = 0
-    for idx, sample in enumerate(read_eval_log_samples(path, all_samples_required=False)):
-        total_seen += 1
-        if idx < offset:
-            continue
-        if len(samples) >= limit:
-            continue
-        samples.append(sample_preview(sample))
-    return basename(path), total_seen, samples
+
+    # Read the log once and slice the already-materialized samples. The previous
+    # implementation asked Inspect to read each visible sample individually, which
+    # made a 50-row page perform 50 separate sample reads against remote .eval logs.
+    # Keep the list payload light: multimedia attachments are read from the full
+    # run detail JSON already loaded by the frontend.
+    log = read_eval_log(path, header_only=False, resolve_attachments=False)
+    samples = log.samples or []
+    page = samples[offset : offset + limit]
+    return basename(path), len(samples), [sample_preview(sample) for sample in page]
 
 
 def raw_log(run_id: str) -> Any:

@@ -3,8 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from pathlib import Path
-from typing import Callable
+from collections.abc import Callable
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse
@@ -60,8 +59,23 @@ def instrument_fastapi(app: FastAPI) -> None:
         logger.exception("Failed to instrument FastAPI")
 
 
-def create_app() -> FastAPI:
+def configure_logging() -> None:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+
+    # Keep Azure SDK HTTP wire logs quiet by default. adlfs/azure-storage-blob
+    # emits one INFO log per Blob HEAD/GET/range request when the root log level
+    # is INFO, which is very noisy while reading Inspect logs from az://.
+    azure_log_level = os.getenv("AZURE_SDK_LOG_LEVEL", "WARNING").upper()
+    for name in (
+        "azure.core.pipeline.policies.http_logging_policy",
+        "azure.storage",
+        "adlfs",
+    ):
+        logging.getLogger(name).setLevel(azure_log_level)
+
+
+def create_app() -> FastAPI:
+    configure_logging()
     configure_application_insights()
 
     app = FastAPI(title="FusionAI Eval Console")
