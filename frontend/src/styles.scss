@@ -288,8 +288,7 @@ tbody tr:last-child td { border-bottom: 0; }
 
 .sample-grid {
   display: grid;
-  grid-template-columns: 1.15fr 1.45fr 1.45fr 1fr;
-  min-height: 460px;
+  grid-template-columns: minmax(240px, 1fr) minmax(360px, 1.6fr) minmax(360px, 1.6fr);
   border-top: 1px solid var(--line);
 }
 
@@ -302,12 +301,15 @@ tbody tr:last-child td { border-bottom: 0; }
 .sample-pane:last-child { border-right: 0; }
 .input-pane { background: #fcfcff; }
 .target-pane { background: #fbfbff; }
-.output-pane { background: #fbfffd; }
-.scores-pane { background: #fff; }
+.output-pane { background: #fbfbff; }
+.comparison-pane {
+  grid-column: span 2;
+  background: #fbfbff;
+}
 
 .target-pane h3 { color: #5147c7; }
-.output-pane h3 { color: #087443; }
-.scores-pane h3 { color: var(--fai-blue); }
+.output-pane h3 { color: #5147c7; }
+.comparison-pane h3 { color: #5147c7; }
 
 pre {
   margin: 0 0 14px;
@@ -343,14 +345,23 @@ pre {
 
 .structured-table {
   width: 100%;
+  table-layout: fixed;
   border: 1px solid var(--line);
   background: white;
   margin-top: 12px;
 }
+.structured-table th,
 .structured-table td {
   cursor: default;
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: pre;
+  word-break: normal;
+  overflow-x: auto;
+  max-width: 0;
+}
+.structured-table th {
+  color: var(--text);
+  background: #f8f9ff;
+  font-weight: 800;
 }
 .structured-table td:first-child {
   width: 28%;
@@ -364,31 +375,21 @@ pre {
   font-weight: 400;
   background: white;
 }
+.comparison-table th:first-child,
+.comparison-table td:first-child {
+  width: 24%;
+  color: var(--muted);
+  font-weight: 650;
+  background: #fbfcfe;
+}
+.comparison-table th:not(:first-child),
+.comparison-table td:not(:first-child) { width: 38%; }
 .structured-table tr:hover { background: transparent; }
 
 .plain-text {
   white-space: pre-wrap;
   line-height: 1.5;
   color: var(--text);
-}
-
-.sample-score {
-  border-bottom: 1px solid var(--line);
-  padding: 10px 0;
-}
-.sample-score:first-of-type { padding-top: 0; }
-.sample-score:last-of-type { border-bottom: 0; }
-.sample-score-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.sample-score.simple {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
 }
 
 .raw-json { margin-top: 16px; }

@@ -11,11 +11,6 @@ interface ScoreRow {
   value: string;
 }
 
-interface SampleScoreRow {
-  name: string;
-  value: string;
-}
-
 @Component({
   selector: 'fai-run-detail',
   standalone: true,
@@ -91,37 +86,31 @@ interface SampleScoreRow {
                 <div class="plain-text" *ngIf="inputText(sample.input)">{{ inputText(sample.input) }}</div>
               </section>
 
-              <section class="sample-pane target-pane">
-                <h3>Target</h3>
-                <ng-container *ngIf="alignedRows(sample).length; else targetPlain">
-                  <table class="structured-table">
+              <ng-container *ngIf="alignedRows(sample).length; else plainOutputAndTarget">
+                <section class="sample-pane comparison-pane">
+                  <h3>Output comparison</h3>
+                  <table class="structured-table comparison-table">
+                    <thead>
+                      <tr><th></th><th>Model output</th><th>Target</th></tr>
+                    </thead>
                     <tbody>
-                      <tr *ngFor="let row of alignedRows(sample)"><td>{{ row.key }}</td><td>{{ row.target }}</td></tr>
+                      <tr *ngFor="let row of alignedRows(sample)"><td>{{ row.key }}</td><td>{{ row.output }}</td><td>{{ row.target }}</td></tr>
                     </tbody>
                   </table>
-                </ng-container>
-                <ng-template #targetPlain><div class="plain-text">{{ plainText(sample.target) }}</div></ng-template>
-              </section>
+                </section>
+              </ng-container>
 
-              <section class="sample-pane output-pane">
-                <h3>Model output</h3>
-                <ng-container *ngIf="alignedRows(sample).length; else outputPlain">
-                  <table class="structured-table output-table">
-                    <tbody>
-                      <tr *ngFor="let row of alignedRows(sample)"><td>{{ row.output }}</td></tr>
-                    </tbody>
-                  </table>
-                </ng-container>
-                <ng-template #outputPlain><div class="plain-text">{{ plainText(sample.completion) }}</div></ng-template>
-              </section>
+              <ng-template #plainOutputAndTarget>
+                <section class="sample-pane output-pane">
+                  <h3>Model output</h3>
+                  <div class="plain-text">{{ plainText(sample.completion) }}</div>
+                </section>
 
-              <section class="sample-pane scores-pane">
-                <h3>Scores</h3>
-                <div class="sample-score simple" *ngFor="let score of sampleScoreRows(sample)">
-                  <strong>{{ score.name }}</strong><span class="mono">{{ score.value }}</span>
-                </div>
-                <div class="state compact-state" *ngIf="!sampleScoreRows(sample).length">No scores available.</div>
-              </section>
+                <section class="sample-pane target-pane">
+                  <h3>Target</h3>
+                  <div class="plain-text">{{ plainText(sample.target) }}</div>
+                </section>
+              </ng-template>
             </div>
           </article>
           <div class="pager" *ngIf="sampleResponse.count">
@@ -280,14 +269,6 @@ export class RunDetailComponent {
     walk(sample.metadata);
 
     return images;
-  }
-
-  sampleScoreRows(sample: SamplePreview): SampleScoreRow[] {
-    if (!sample.scores || typeof sample.scores !== 'object') return [];
-    return Object.entries(sample.scores as Record<string, unknown>).map(([name, raw]) => ({
-      name,
-      value: this.scoreValue(raw),
-    }));
   }
 
   sampleScoreNames(samples: SamplePreview[]): string[] {
