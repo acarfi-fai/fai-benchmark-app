@@ -59,6 +59,17 @@ docker build -t fusionai-eval-console .
 docker run --rm -p 8000:8000 -e INSPECT_LOG_DIR=/logs fusionai-eval-console
 ```
 
+## Azure Container Registry build
+
+From `fai-benchmark-app/`:
+
+```bash
+az acr build \
+  --registry faibenchmarkacr \
+  --image inspect-view:latest \
+  .
+```
+
 ## Routes
 
 Frontend:
